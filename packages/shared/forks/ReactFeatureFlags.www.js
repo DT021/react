@@ -16,10 +16,12 @@ export const {
   debugRenderPhaseSideEffectsForStrictMode,
   replayFailedUnitOfWorkWithInvokeGuardedCallback,
   warnAboutDeprecatedLifecycles,
-  disableYielding,
   disableInputAttributeSyncing,
   warnAboutShorthandPropertyCollision,
   warnAboutDeprecatedSetNativeProps,
+  enableUserBlockingEvents,
+  disableLegacyContext,
+  disableSchedulerTimeoutBasedOnReactExpirationTime,
 } = require('ReactFeatureFlags');
 
 // In www, we have experimental support for gathering data
@@ -39,11 +41,6 @@ export const enableStableConcurrentModeAPIs = false;
 export const enableSuspenseServerRenderer = true;
 
 export const disableJavaScriptURLs = true;
-
-// I've chosen to make this a static flag instead of a dynamic flag controlled
-// by a GK so that it doesn't increase bundle size. It should still be easy
-// to rollback by reverting the commit that turns this on.
-export const enableNewScheduler = false;
 
 let refCount = 0;
 export function addUserTimingListener() {
@@ -72,7 +69,23 @@ function updateFlagOutsideOfReactCallStack() {
   }
 }
 
-export const enableEventAPI = true;
+export const enableFlareAPI = true;
+
+export const enableFundamentalAPI = false;
+
+export const enableScopeAPI = true;
+
+export const enableJSXTransformAPI = true;
+
+export const warnAboutUnmockedScheduler = true;
+
+export const enableSuspenseCallback = true;
+
+export const warnAboutDefaultPropsOnFunctionComponents = false;
+
+export const warnAboutStringRefs = false;
+
+export const flushSuspenseFallbacksInTests = true;
 
 // Flow magic to verify the exports of this file match the original version.
 // eslint-disable-next-line no-unused-vars

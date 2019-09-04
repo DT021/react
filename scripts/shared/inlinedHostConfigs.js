@@ -9,11 +9,7 @@
 module.exports = [
   {
     shortName: 'dom',
-    entryPoints: [
-      'react-dom',
-      'react-dom/unstable-fizz.node',
-      'react-dom/unstable-new-scheduler',
-    ],
+    entryPoints: ['react-dom', 'react-dom/unstable-fizz.node'],
     isFlowTyped: true,
     isFizzSupported: true,
   },
@@ -22,11 +18,6 @@ module.exports = [
     entryPoints: ['react-dom/unstable-fizz.browser'],
     isFlowTyped: true,
     isFizzSupported: true,
-  },
-  {
-    shortName: 'fire',
-    entryPoints: ['react-dom/unstable-fire'],
-    isFlowTyped: true,
   },
   {
     shortName: 'art',

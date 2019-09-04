@@ -9,12 +9,12 @@
 
 // TODO: direct imports like some-package/src/* are bad. Fix me.
 import {getCurrentFiberOwnerNameInDevOrNull} from 'react-reconciler/src/ReactCurrentFiber';
-import {registrationNameModules} from 'events/EventPluginRegistry';
+import {registrationNameModules} from 'legacy-events/EventPluginRegistry';
 import warning from 'shared/warning';
 import {canUseDOM} from 'shared/ExecutionEnvironment';
 import warningWithoutStack from 'shared/warningWithoutStack';
-import type {ReactEventResponderEventType} from 'shared/ReactTypes';
-import type {DOMTopLevelEventType} from 'events/TopLevelEventTypes';
+import endsWith from 'shared/endsWith';
+import type {DOMTopLevelEventType} from 'legacy-events/TopLevelEventTypes';
 import {setListenToResponderEventTypes} from '../events/DOMEventResponderSystem';
 
 import {
@@ -86,7 +86,7 @@ import {validateProperties as validateARIAProperties} from '../shared/ReactDOMIn
 import {validateProperties as validateInputProperties} from '../shared/ReactDOMNullInputValuePropHook';
 import {validateProperties as validateUnknownProperties} from '../shared/ReactDOMUnknownPropertyHook';
 
-import {enableEventAPI} from 'shared/ReactFeatureFlags';
+import {enableFlareAPI} from 'shared/ReactFeatureFlags';
 
 let didWarnInvalidHydration = false;
 let didWarnShadyDOM = false;
@@ -98,6 +98,7 @@ const AUTOFOCUS = 'autoFocus';
 const CHILDREN = 'children';
 const STYLE = 'style';
 const HTML = '__html';
+const LISTENERS = 'listeners';
 
 const {html: HTML_NAMESPACE} = Namespaces;
 
@@ -340,6 +341,7 @@ function setInitialDOMProperties(
         setTextContent(domElement, '' + nextProp);
       }
     } else if (
+      (enableFlareAPI && propKey === LISTENERS) ||
       propKey === SUPPRESS_CONTENT_EDITABLE_WARNING ||
       propKey === SUPPRESS_HYDRATION_WARNING
     ) {
@@ -518,6 +520,7 @@ export function setInitialProperties(
   switch (tag) {
     case 'iframe':
     case 'object':
+    case 'embed':
       trapBubbledEvent(TOP_LOAD, domElement);
       props = rawProps;
       break;
@@ -695,6 +698,7 @@ export function diffProperties(
     } else if (propKey === DANGEROUSLY_SET_INNER_HTML || propKey === CHILDREN) {
       // Noop. This is handled by the clear text mechanism.
     } else if (
+      (enableFlareAPI && propKey === LISTENERS) ||
       propKey === SUPPRESS_CONTENT_EDITABLE_WARNING ||
       propKey === SUPPRESS_HYDRATION_WARNING
     ) {
@@ -786,6 +790,7 @@ export function diffProperties(
         (updatePayload = updatePayload || []).push(propKey, '' + nextProp);
       }
     } else if (
+      (enableFlareAPI && propKey === LISTENERS) ||
       propKey === SUPPRESS_CONTENT_EDITABLE_WARNING ||
       propKey === SUPPRESS_HYDRATION_WARNING
     ) {
@@ -912,6 +917,7 @@ export function diffHydratedProperties(
   switch (tag) {
     case 'iframe':
     case 'object':
+    case 'embed':
       trapBubbledEvent(TOP_LOAD, domElement);
       break;
     case 'video':
@@ -1039,6 +1045,7 @@ export function diffHydratedProperties(
       if (suppressHydrationWarning) {
         // Don't bother comparing. We're ignoring all these warnings.
       } else if (
+        (enableFlareAPI && propKey === LISTENERS) ||
         propKey === SUPPRESS_CONTENT_EDITABLE_WARNING ||
         propKey === SUPPRESS_HYDRATION_WARNING ||
         // Controlled attributes are not validated
@@ -1279,67 +1286,35 @@ export function restoreControlledState(
 }
 
 export function listenToEventResponderEventTypes(
-  eventTypes: Array<ReactEventResponderEventType>,
+  eventTypes: Array<string>,
   element: Element | Document,
 ): void {
-  if (enableEventAPI) {
+  if (enableFlareAPI) {
     // Get the listening Set for this element. We use this to track
     // what events we're listening to.
     const listeningSet = getListeningSetForElement(element);
 
     // Go through each target event type of the event responder
     for (let i = 0, length = eventTypes.length; i < length; ++i) {
-      const targetEventType = eventTypes[i];
-      let topLevelType;
-      let capture = false;
-      let passive = true;
-
-      // If no event config object is provided (i.e. - only a string),
-      // we default to enabling passive and not capture.
-      if (typeof targetEventType === 'string') {
-        topLevelType = targetEventType;
-      } else {
-        if (__DEV__) {
-          warning(
-            typeof targetEventType === 'object' && targetEventType !== null,
-            'Event Responder: invalid entry in targetEventTypes array. ' +
-              'Entry must be string or an object. Instead, got %s.',
-            targetEventType,
-          );
-        }
-        const targetEventConfigObject = ((targetEventType: any): {
-          name: string,
-          passive?: boolean,
-          capture?: boolean,
-        });
-        topLevelType = targetEventConfigObject.name;
-        if (targetEventConfigObject.passive !== undefined) {
-          passive = targetEventConfigObject.passive;
-        }
-        if (targetEventConfigObject.capture !== undefined) {
-          capture = targetEventConfigObject.capture;
-        }
-      }
-      // Create a unique name for this event, plus its properties. We'll
-      // use this to ensure we don't listen to the same event with the same
-      // properties again.
-      const passiveKey = passive ? '_passive' : '_active';
-      const captureKey = capture ? '_capture' : '';
-      const listeningName = `${topLevelType}${passiveKey}${captureKey}`;
-      if (!listeningSet.has(listeningName)) {
+      const eventType = eventTypes[i];
+      const isPassive = !endsWith(eventType, '_active');
+      const eventKey = isPassive ? eventType + '_passive' : eventType;
+      const targetEventType = isPassive
+        ? eventType
+        : eventType.substring(0, eventType.length - 7);
+      if (!listeningSet.has(eventKey)) {
         trapEventForResponderEventSystem(
           element,
-          ((topLevelType: any): DOMTopLevelEventType),
-          capture,
-          passive,
+          ((targetEventType: any): DOMTopLevelEventType),
+          isPassive,
         );
-        listeningSet.add(listeningName);
+        listeningSet.add(eventKey);
       }
     }
   }
 }
 
 // We can remove this once the event API is stable and out of a flag
-if (enableEventAPI) {
+if (enableFlareAPI) {
   setListenToResponderEventTypes(listenToEventResponderEventTypes);
 }

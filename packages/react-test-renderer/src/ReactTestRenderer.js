@@ -37,12 +37,14 @@ import {
   MemoComponent,
   SimpleMemoComponent,
   IncompleteClassComponent,
+  ScopeComponent,
 } from 'shared/ReactWorkTags';
 import invariant from 'shared/invariant';
 import ReactVersion from 'shared/ReactVersion';
 import act from './ReactTestRendererAct';
 
 import {getPublicInstance} from './ReactTestHostConfig';
+import {ConcurrentRoot, LegacyRoot} from 'shared/ReactRootTags';
 
 type TestRendererOptions = {
   createNodeMock: (element: React$Element<any>) => any,
@@ -202,6 +204,7 @@ function toTree(node: ?Fiber) {
     case ForwardRef:
     case MemoComponent:
     case IncompleteClassComponent:
+    case ScopeComponent:
       return childrenToTree(node.child);
     default:
       invariant(
@@ -439,8 +442,9 @@ const ReactTestRendererFiber = {
     };
     let root: FiberRoot | null = createContainer(
       container,
-      isConcurrent,
+      isConcurrent ? ConcurrentRoot : LegacyRoot,
       false,
+      null,
     );
     invariant(root != null, 'something went wrong');
     updateContainer(element, root, null, null);

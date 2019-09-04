@@ -7,9 +7,6 @@ const inlinedHostConfigs = require('../shared/inlinedHostConfigs');
 const UMD_DEV = bundleTypes.UMD_DEV;
 const UMD_PROD = bundleTypes.UMD_PROD;
 const UMD_PROFILING = bundleTypes.UMD_PROFILING;
-const NODE_DEV = bundleTypes.NODE_DEV;
-const NODE_PROD = bundleTypes.NODE_PROD;
-const NODE_PROFILING = bundleTypes.NODE_PROFILING;
 const FB_WWW_DEV = bundleTypes.FB_WWW_DEV;
 const FB_WWW_PROD = bundleTypes.FB_WWW_PROD;
 const FB_WWW_PROFILING = bundleTypes.FB_WWW_PROFILING;
@@ -71,22 +68,6 @@ const forks = Object.freeze({
   // We have a few forks for different environments.
   'shared/ReactFeatureFlags': (bundleType, entry) => {
     switch (entry) {
-      case 'react-dom/unstable-new-scheduler': {
-        switch (bundleType) {
-          case FB_WWW_DEV:
-          case FB_WWW_PROD:
-          case FB_WWW_PROFILING:
-            return 'shared/forks/ReactFeatureFlags.www-new-scheduler.js';
-          case NODE_DEV:
-          case NODE_PROD:
-          case NODE_PROFILING:
-            return 'shared/forks/ReactFeatureFlags.new-scheduler.js';
-          default:
-            throw Error(
-              `Unexpected entry (${entry}) and bundleType (${bundleType})`
-            );
-        }
-      }
       case 'react-native-renderer':
         switch (bundleType) {
           case RN_FB_DEV:
@@ -249,6 +230,17 @@ const forks = Object.freeze({
     }
   },
 
+  'react/src/ReactSharedInternals.js': (bundleType, entry) => {
+    switch (bundleType) {
+      case UMD_DEV:
+      case UMD_PROD:
+      case UMD_PROFILING:
+        return 'react/src/forks/ReactSharedInternals.umd.js';
+      default:
+        return null;
+    }
+  },
+
   // Different wrapping/reporting for caught errors.
   'shared/invokeGuardedCallbackImpl': (bundleType, entry) => {
     switch (bundleType) {
@@ -389,9 +381,9 @@ const forks = Object.freeze({
   },
 
   // React DOM uses different top level event names and supports mouse events.
-  'events/ResponderTopLevelEventTypes': (bundleType, entry) => {
+  'legacy-events/ResponderTopLevelEventTypes': (bundleType, entry) => {
     if (entry === 'react-dom' || entry.startsWith('react-dom/')) {
-      return 'events/forks/ResponderTopLevelEventTypes.dom.js';
+      return 'legacy-events/forks/ResponderTopLevelEventTypes.dom.js';
     }
     return null;
   },

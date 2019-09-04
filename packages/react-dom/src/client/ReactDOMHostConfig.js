@@ -7,8 +7,6 @@
  * @flow
  */
 
-import * as Scheduler from 'scheduler';
-
 import {precacheFiberNode, updateFiberProps} from './ReactDOMComponentTree';
 import {
   createElement,
@@ -33,7 +31,7 @@ import {
   isEnabled as ReactBrowserEventEmitterIsEnabled,
   setEnabled as ReactBrowserEventEmitterSetEnabled,
 } from '../events/ReactBrowserEventEmitter';
-import {Namespaces, getChildNamespace} from '../shared/DOMNamespaces';
+import {getChildNamespace} from '../shared/DOMNamespaces';
 import {
   ELEMENT_NODE,
   TEXT_NODE,
@@ -44,10 +42,16 @@ import {
 import dangerousStyleValue from '../shared/dangerousStyleValue';
 
 import type {DOMContainer} from './ReactDOM';
-import type {ReactEventResponder} from 'shared/ReactTypes';
-import {unmountEventResponder} from '../events/DOMEventResponderSystem';
-import {REACT_EVENT_TARGET_TOUCH_HIT} from 'shared/ReactSymbols';
-import {canUseDOM} from 'shared/ExecutionEnvironment';
+import type {
+  ReactDOMEventResponder,
+  ReactDOMEventResponderInstance,
+  ReactDOMFundamentalComponentInstance,
+} from 'shared/ReactDOMTypes';
+import {
+  addRootEventTypesForResponderInstance,
+  mountEventResponder,
+  unmountEventResponder,
+} from '../events/DOMEventResponderSystem';
 
 export type Type = string;
 export type Props = {
@@ -86,10 +90,6 @@ export type PublicInstance = Element | Text;
 type HostContextDev = {
   namespace: string,
   ancestorInfo: mixed,
-  eventData: null | {|
-    isEventComponent?: boolean,
-    isEventTarget?: boolean,
-  |},
 };
 type HostContextProd = string;
 export type HostContext = HostContextDev | HostContextProd;
@@ -100,22 +100,9 @@ export type NoTimeout = -1;
 
 import {
   enableSuspenseServerRenderer,
-  enableEventAPI,
+  enableFlareAPI,
+  enableFundamentalAPI,
 } from 'shared/ReactFeatureFlags';
-import warning from 'shared/warning';
-
-const {html: HTML_NAMESPACE} = Namespaces;
-
-// Intentionally not named imports because Rollup would
-// use dynamic dispatch for CommonJS interop named imports.
-const {
-  unstable_now: now,
-  unstable_scheduleCallback: scheduleDeferredCallback,
-  unstable_shouldYield: shouldYield,
-  unstable_cancelCallback: cancelDeferredCallback,
-} = Scheduler;
-
-export {now, scheduleDeferredCallback, shouldYield, cancelDeferredCallback};
 
 let SUPPRESS_HYDRATION_WARNING;
 if (__DEV__) {
@@ -173,7 +160,7 @@ export function getRootHostContext(
   if (__DEV__) {
     const validatedTag = type.toLowerCase();
     const ancestorInfo = updatedAncestorInfo(null, validatedTag);
-    return {namespace, ancestorInfo, eventData: null};
+    return {namespace, ancestorInfo};
   }
   return namespace;
 }
@@ -190,61 +177,10 @@ export function getChildHostContext(
       parentHostContextDev.ancestorInfo,
       type,
     );
-    return {namespace, ancestorInfo, eventData: null};
+    return {namespace, ancestorInfo};
   }
   const parentNamespace = ((parentHostContext: any): HostContextProd);
   return getChildNamespace(parentNamespace, type);
-}
-
-export function getChildHostContextForEventComponent(
-  parentHostContext: HostContext,
-): HostContext {
-  if (__DEV__) {
-    const parentHostContextDev = ((parentHostContext: any): HostContextDev);
-    const {namespace, ancestorInfo} = parentHostContextDev;
-    warning(
-      parentHostContextDev.eventData === null ||
-        !parentHostContextDev.eventData.isEventTarget,
-      'validateDOMNesting: React event targets must not have event components as children.',
-    );
-    const eventData = {
-      isEventComponent: true,
-      isEventTarget: false,
-    };
-    return {namespace, ancestorInfo, eventData};
-  }
-  return parentHostContext;
-}
-
-export function getChildHostContextForEventTarget(
-  parentHostContext: HostContext,
-  type: Symbol | number,
-): HostContext {
-  if (__DEV__) {
-    const parentHostContextDev = ((parentHostContext: any): HostContextDev);
-    const {namespace, ancestorInfo} = parentHostContextDev;
-    if (type === REACT_EVENT_TARGET_TOUCH_HIT) {
-      warning(
-        parentHostContextDev.eventData === null ||
-          !parentHostContextDev.eventData.isEventComponent,
-        'validateDOMNesting: <TouchHitTarget> cannot not be a direct child of an event component. ' +
-          'Ensure <TouchHitTarget> is a direct child of a DOM element.',
-      );
-      const parentNamespace = parentHostContextDev.namespace;
-      if (parentNamespace !== HTML_NAMESPACE) {
-        throw new Error(
-          '<TouchHitTarget> was used in an unsupported DOM namespace. ' +
-            'Ensure the <TouchHitTarget> is used in an HTML namespace.',
-        );
-      }
-    }
-    const eventData = {
-      isEventComponent: false,
-      isEventTarget: true,
-    };
-    return {namespace, ancestorInfo, eventData};
-  }
-  return parentHostContext;
 }
 
 export function getPublicInstance(instance: Instance): * {
@@ -378,17 +314,6 @@ export function createTextInstance(
   if (__DEV__) {
     const hostContextDev = ((hostContext: any): HostContextDev);
     validateDOMNesting(null, text, hostContextDev.ancestorInfo);
-    if (enableEventAPI) {
-      const eventData = hostContextDev.eventData;
-      if (eventData !== null) {
-        warning(
-          !eventData.isEventComponent,
-          'validateDOMNesting: React event components cannot have text DOM nodes as children. ' +
-            'Wrap the child text "%s" in an element.',
-          text,
-        );
-      }
-    }
   }
   const textNode: TextInstance = createTextNode(text, rootContainerInstance);
   precacheFiberNode(internalInstanceHandle, textNode);
@@ -396,6 +321,7 @@ export function createTextInstance(
 }
 
 export const isPrimaryRenderer = true;
+export const warnsIfNotActing = true;
 // This initialization code may run even on server environments
 // if a component just imports ReactDOM (e.g. for findDOMNode).
 // Some environments might not have setTimeout or clearTimeout.
@@ -585,7 +511,12 @@ export function hideInstance(instance: Instance): void {
   // TODO: Does this work for all element types? What about MathML? Should we
   // pass host context to this method?
   instance = ((instance: any): HTMLElement);
-  instance.style.display = 'none';
+  const style = instance.style;
+  if (typeof style.setProperty === 'function') {
+    style.setProperty('display', 'none', 'important');
+  } else {
+    style.display = 'none';
+  }
 }
 
 export function hideTextInstance(textInstance: TextInstance): void {
@@ -670,44 +601,39 @@ export function registerSuspenseInstanceRetry(
   instance._reactRetry = callback;
 }
 
+function getNextHydratable(node) {
+  // Skip non-hydratable nodes.
+  for (; node != null; node = node.nextSibling) {
+    const nodeType = node.nodeType;
+    if (nodeType === ELEMENT_NODE || nodeType === TEXT_NODE) {
+      break;
+    }
+    if (enableSuspenseServerRenderer) {
+      if (nodeType === COMMENT_NODE) {
+        const nodeData = (node: any).data;
+        if (
+          nodeData === SUSPENSE_START_DATA ||
+          nodeData === SUSPENSE_FALLBACK_START_DATA ||
+          nodeData === SUSPENSE_PENDING_START_DATA
+        ) {
+          break;
+        }
+      }
+    }
+  }
+  return (node: any);
+}
+
 export function getNextHydratableSibling(
   instance: HydratableInstance,
 ): null | HydratableInstance {
-  let node = instance.nextSibling;
-  // Skip non-hydratable nodes.
-  while (
-    node &&
-    node.nodeType !== ELEMENT_NODE &&
-    node.nodeType !== TEXT_NODE &&
-    (!enableSuspenseServerRenderer ||
-      node.nodeType !== COMMENT_NODE ||
-      ((node: any).data !== SUSPENSE_START_DATA &&
-        (node: any).data !== SUSPENSE_PENDING_START_DATA &&
-        (node: any).data !== SUSPENSE_FALLBACK_START_DATA))
-  ) {
-    node = node.nextSibling;
-  }
-  return (node: any);
+  return getNextHydratable(instance.nextSibling);
 }
 
 export function getFirstHydratableChild(
   parentInstance: Container | Instance,
 ): null | HydratableInstance {
-  let next = parentInstance.firstChild;
-  // Skip non-hydratable nodes.
-  while (
-    next &&
-    next.nodeType !== ELEMENT_NODE &&
-    next.nodeType !== TEXT_NODE &&
-    (!enableSuspenseServerRenderer ||
-      next.nodeType !== COMMENT_NODE ||
-      ((next: any).data !== SUSPENSE_START_DATA &&
-        (next: any).data !== SUSPENSE_FALLBACK_START_DATA &&
-        (next: any).data !== SUSPENSE_PENDING_START_DATA))
-  ) {
-    next = next.nextSibling;
-  }
-  return (next: any);
+  return getNextHydratable(parentInstance.firstChild);
 }
 
 export function hydrateInstance(
@@ -764,7 +690,11 @@ export function getNextHydratableInstanceAfterSuspenseInstance(
         } else {
           depth--;
         }
-      } else if (data === SUSPENSE_START_DATA) {
+      } else if (
+        data === SUSPENSE_START_DATA ||
+        data === SUSPENSE_FALLBACK_START_DATA ||
+        data === SUSPENSE_PENDING_START_DATA
+      ) {
         depth++;
       }
     }
@@ -888,98 +818,103 @@ export function didNotFindHydratableSuspenseInstance(
   }
 }
 
-export function handleEventComponent(
-  eventResponder: ReactEventResponder,
-  rootContainerInstance: Container,
-): void {
-  if (enableEventAPI) {
-    const rootElement = rootContainerInstance.ownerDocument;
-    listenToEventResponderEventTypes(
-      eventResponder.targetEventTypes,
-      rootElement,
-    );
+export function mountResponderInstance(
+  responder: ReactDOMEventResponder,
+  responderInstance: ReactDOMEventResponderInstance,
+  responderProps: Object,
+  responderState: Object,
+  instance: Instance,
+): ReactDOMEventResponderInstance {
+  // Listen to events
+  const doc = instance.ownerDocument;
+  const documentBody = doc.body || doc;
+  const {
+    rootEventTypes,
+    targetEventTypes,
+  } = ((responder: any): ReactDOMEventResponder);
+  if (targetEventTypes !== null) {
+    listenToEventResponderEventTypes(targetEventTypes, documentBody);
   }
+  if (rootEventTypes !== null) {
+    addRootEventTypesForResponderInstance(responderInstance, rootEventTypes);
+    listenToEventResponderEventTypes(rootEventTypes, documentBody);
+  }
+  mountEventResponder(
+    responder,
+    responderInstance,
+    responderProps,
+    responderState,
+  );
+  return responderInstance;
 }
 
-export function unmountEventComponent(
-  eventResponder: ReactEventResponder,
-  rootContainerInstance: Container,
-  internalInstanceHandle: Object,
+export function unmountResponderInstance(
+  responderInstance: ReactDOMEventResponderInstance,
 ): void {
-  if (enableEventAPI) {
+  if (enableFlareAPI) {
     // TODO stop listening to targetEventTypes
-    unmountEventResponder(eventResponder, internalInstanceHandle);
+    unmountEventResponder(responderInstance);
   }
 }
 
-export function getEventTargetChildElement(
-  type: Symbol | number,
-  props: Props,
-): null | EventTargetChildElement {
-  if (enableEventAPI) {
-    if (type === REACT_EVENT_TARGET_TOUCH_HIT) {
-      const {bottom, left, right, top} = props;
+export function getFundamentalComponentInstance(
+  fundamentalInstance: ReactDOMFundamentalComponentInstance,
+): Instance {
+  if (enableFundamentalAPI) {
+    const {currentFiber, impl, props, state} = fundamentalInstance;
+    const instance = impl.getInstance(null, props, state);
+    precacheFiberNode(currentFiber, instance);
+    return instance;
+  }
+  // Because of the flag above, this gets around the Flow error;
+  return (null: any);
+}
 
-      if (!bottom && !left && !right && !top) {
-        return null;
-      }
-      return {
-        type: 'div',
-        props: {
-          style: {
-            position: 'absolute',
-            zIndex: -1,
-            bottom: bottom ? `-${bottom}px` : '0px',
-            left: left ? `-${left}px` : '0px',
-            right: right ? `-${right}px` : '0px',
-            top: top ? `-${top}px` : '0px',
-          },
-        },
-      };
+export function mountFundamentalComponent(
+  fundamentalInstance: ReactDOMFundamentalComponentInstance,
+): void {
+  if (enableFundamentalAPI) {
+    const {impl, instance, props, state} = fundamentalInstance;
+    const onMount = impl.onMount;
+    if (onMount !== undefined) {
+      onMount(null, instance, props, state);
     }
   }
-  return null;
 }
 
-export function handleEventTarget(
-  type: Symbol | number,
-  props: Props,
-  rootContainerInstance: Container,
-  internalInstanceHandle: Object,
+export function shouldUpdateFundamentalComponent(
+  fundamentalInstance: ReactDOMFundamentalComponentInstance,
 ): boolean {
-  return false;
+  if (enableFundamentalAPI) {
+    const {impl, prevProps, props, state} = fundamentalInstance;
+    const shouldUpdate = impl.shouldUpdate;
+    if (shouldUpdate !== undefined) {
+      return shouldUpdate(null, prevProps, props, state);
+    }
+  }
+  return true;
 }
 
-export function commitEventTarget(
-  type: Symbol | number,
-  props: Props,
-  instance: Instance,
-  parentInstance: Instance,
+export function updateFundamentalComponent(
+  fundamentalInstance: ReactDOMFundamentalComponentInstance,
 ): void {
-  if (enableEventAPI) {
-    if (type === REACT_EVENT_TARGET_TOUCH_HIT) {
-      if (__DEV__ && canUseDOM) {
-        // This is done at DEV time because getComputedStyle will
-        // typically force a style recalculation and force a layout,
-        // reflow -– both of which are sync are expensive.
-        const computedStyles = window.getComputedStyle(parentInstance);
-        const position = computedStyles.getPropertyValue('position');
-        warning(
-          position !== '' && position !== 'static',
-          '<TouchHitTarget> inserts an empty absolutely positioned <div>. ' +
-            'This requires its parent DOM node to be positioned too, but the ' +
-            'parent DOM node was found to have the style "position" set to ' +
-            'either no value, or a value of "static". Try using a "position" ' +
-            'value of "relative".',
-        );
-        warning(
-          computedStyles.getPropertyValue('zIndex') !== '',
-          '<TouchHitTarget> inserts an empty <div> with "z-index" of "-1". ' +
-            'This requires its parent DOM node to have a "z-index" great than "-1",' +
-            'but the parent DOM node was found to no "z-index" value set.' +
-            ' Try using a "z-index" value of "0" or greater.',
-        );
-      }
+  if (enableFundamentalAPI) {
+    const {impl, instance, prevProps, props, state} = fundamentalInstance;
+    const onUpdate = impl.onUpdate;
+    if (onUpdate !== undefined) {
+      onUpdate(null, instance, prevProps, props, state);
+    }
+  }
+}
+
+export function unmountFundamentalComponent(
+  fundamentalInstance: ReactDOMFundamentalComponentInstance,
+): void {
+  if (enableFundamentalAPI) {
+    const {impl, instance, props, state} = fundamentalInstance;
+    const onUnmount = impl.onUnmount;
+    if (onUnmount !== undefined) {
+      onUnmount(null, instance, props, state);
     }
   }
 }
